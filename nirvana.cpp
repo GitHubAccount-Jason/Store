@@ -1,3 +1,5 @@
+// 码了快2周, 其中有一些奇技淫巧
+// 只有stringType允许convertible_to, 其他要求显式转换( 被坑了无数遍 )
 #include <iostream>
 #include <list>
 #include <string_view>
@@ -198,23 +200,23 @@ public:
     len_ = wcslen(a);
     base_ = (wchar_t*)malloc(sizeof(wchar_t) * (len_ + 1));
     wcscpy(base_, a);
-  }                         /*}}}*/
-  WString(const WString& a) /*{{{*/
-      : base_((wchar_t*)malloc(sizeof(wchar_t) * (a.length() + 1))), len_(a.length()) {
-    wcscpy(base_, a.c_str());
-  }                          /*}}}*/
-  WString(const WString&& a) /*{{{*/
-      : base_((wchar_t*)malloc(sizeof(wchar_t) * (a.length() + 1))), len_(a.length()) {
-    wcscpy(base_, a.c_str());
-  }                                      /*}}}*/
+  } /*}}}*/
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, WString>
+  WString(T&& ws)
+      : base_((wchar_t*)malloc(sizeof(wchar_t) * (ws.length() + 1))), len_(ws.length()) {
+    wcscpy(base_, ws.c_str());
+  }
+  WString(WString const volatile&) = delete;
+  WString(WString const volatile&&) = delete;
   WString& operator=(const WString& a) { /*{{{*/
     free(base_);
     base_ = (wchar_t*)malloc(sizeof(wchar_t) * (a.length() + 1));
     len_ = a.length();
     wcscpy(base_, a.c_str());
     return *this;
-  }                                  /*}}}*/
-  WString substr(ull pos, ull len) { /*{{{*/
+  }                                        /*}}}*/
+  WString substr(ull pos, ull len) const { /*{{{*/
     wchar_t* p = (wchar_t*)malloc(sizeof(wchar_t) * (len + 1));
     wmemcpy(p, base_ + pos, len);
     p[len] = L'\0';
@@ -340,7 +342,7 @@ public:
   }                                   /*}}}*/
   void operator+=(const wchar_t* w) { /*{{{*/
     ull wlen = wcslen(w);
-    base_ = (wchar_t*)realloc(base_, sizeof(wchar_t) * sizeof(wchar_t) * (len_ + wlen + 1));
+    base_ = (wchar_t*)realloc(base_, sizeof(wchar_t) * (len_ + wlen + 1));
     wmemcpy(base_ + len_, w, (wlen));
     len_ += wlen;
     base_[len_] = L'\0';
@@ -387,30 +389,38 @@ WString operator+(const wchar_t* w, const WString& s) { /*{{{*/
   buf[wlen + slen] = L'\0';
   return WString::stealFrom(buf);
 } /*}}}*/
+std::ostream& operator<<(std::ostream& os, const WString& w) { /*{{{*/
+  w.toStdOut();
+  return os;
+} /*}}}*/
 }  // namespace NRT
 
 using stringType = NRT::WString;
-std::array<const char, 30> __identifies = {'(',  ')', '[', ']', '{', '}', '`', '~', '!', '@',
-                                           '#',  '$', '%', '^', '&', '*', '-', '_', '+', '=',
-                                           '\'', '|', ';', ':', ',', '<', '.', '>', '/', '?'};
-std::array<const char, 2> __string_pair = {'"', '\''};
+std::array<stringType, 30> __identifies = {
+    L"(", L")", L"[", L"]", L"{", L"}", L"`", L"~", L"!", L"@", L"#", L"$", L"%", L"^", L"&",
+    L"*", L"-", L"_", L"+", L"=", L"|", L";", L":", L",", L"<", L".", L">", L"/", L"?", L"=="};
+std::array<stringType, 2> __string_pair = {L"\"", L"\'"};
 std::array<std::pair<const wchar_t*, const wchar_t*>, 4> __escape_char = {
     std::make_pair(L"\\t", L"\t"), std::make_pair(L"\\b", L"\b"), std::make_pair(L"\\e", L"\e"),
     std::make_pair(L"\\n", L"\n")};
-std::array<const char, 3> __wasted = {' ', '\t', '\n'};
+std::array<stringType, 3> __wasted = {L" ", L"\t", L"\n"};
 std::array<stringType, 2> __keywords = {L"import", L"if"};
 std::array<std::array<stringType, 2>, 6> __token_type_map_table{
-    std::array<stringType, 2>{L"(", L"pair-token"}, std::array<stringType, 2>{L")", L"pair-token"},
-    std::array<stringType, 2>{L"[", L"pair-token"}, std::array<stringType, 2>{L"]", L"pair-token"},
-    std::array<stringType, 2>{L"{", L"pair-token"}, std::array<stringType, 2>{L"}", L"pair-token"}};
-stringType __token_type_map(stringType name) {
+    /*{{{*/
+    std::array<stringType, 2>{L"(", L"pair-token"},
+    std::array<stringType, 2>{L")", L"pair-token"},
+    std::array<stringType, 2>{L"[", L"pair-token"},
+    std::array<stringType, 2>{L"]", L"pair-token"},
+    std::array<stringType, 2>{L"{", L"pair-token"},
+    std::array<stringType, 2>{L"}", L"pair-token"}}; /*}}}*/
+stringType __token_type_map(stringType name) {       /*{{{*/
   for (auto& i : __token_type_map_table) {
     if (i[0] == name) {
       return i[1];
     }
   }
   return L"identifier";
-}
+} /*}}}*/
 class System { /*{{{*/
   public:
   class Console {
@@ -535,7 +545,7 @@ class Exception { /*{{{*/
     exit(3);
   }
 }; /*}}}*/
-/*{{{*/
+/*{{{RaiseError Micros*/
 #define __RaiseError__(type, content)                                                \
   do {                                                                               \
     Exception::type(L"In line " + NRT::toWString(__LINE__) + ":" + content).raise(); \
@@ -564,45 +574,112 @@ struct typeinfo { /*{{{*/
   public:
   typeinfo() {}
   typeinfo(const stringType& s) : name_(s) {}
+  typeinfo(const stringType&& s) : name_(s) {}
   typeinfo(const typeinfo& a) : name_(a.name()) {}
   typeinfo(const typeinfo&& a) : name_(a.name()) {}
   typeinfo& operator=(const typeinfo& a) {
     name_ = a.name();
     return *this;
   }
+  typeinfo& operator=(const typeinfo&& a) {
+    name_ = a.name();
+    return *this;
+  }
   bool operator==(const typeinfo& a) const { return name_ == a.name(); }
   bool operator!=(const typeinfo& a) const { return name_ != a.name(); }
+  bool operator==(const typeinfo&& a) const { return name_ == a.name(); }
+  bool operator!=(const typeinfo&& a) const { return name_ != a.name(); }
   ~typeinfo() {}
   stringType& name() { return name_; }
   const stringType& name() const { return name_; }
+}; /*}}}*/
+/*
+ * @brief 储存每个Var的元数据(name 和 type)
+ * */
+struct VarMeta { /*{{{*/
+  private:
+  stringType name_;
+  typeinfo tp_;
+
+  public:
+  VarMeta(VarMeta const volatile&) = delete;
+  VarMeta(VarMeta const volatile&&) = delete;
+  bool operator==(VarMeta const volatile&) = delete;
+  bool operator==(VarMeta const volatile&&) = delete;
+
+  stringType& name() { return name_; }
+  const stringType& name() const { return name_; }
+  typeinfo& type() { return tp_; }
+  const typeinfo& type() const { return tp_; }
+  VarMeta() {}
+  template <class Str, class TpInfo>
+    requires std::same_as<typename std::decay<Str>::type, stringType> &&
+                 std::same_as<typename std::decay<TpInfo>::type, typeinfo>
+  VarMeta(Str&& name, TpInfo&& tp) : name_(stringType(name)), tp_(typeinfo(tp)) {}
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarMeta>
+  VarMeta(V&& v) : name_(v.name()), tp_(v.type()) {}
+  ~VarMeta() {}
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarMeta>
+  VarMeta& operator=(V&& v) {
+    name_ = VarMeta(v).name();
+    tp_ = VarMeta(v).type();
+    return *this;
+  }
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarMeta>
+  bool operator==(V&& v) const {
+    return name_ == VarMeta(v).name() && tp_ == VarMeta(v).type();
+  }
 };           /*}}}*/
 struct Var { /*{{{*/
   private:
-  stringType name_;
-  typeinfo type_;
+  VarMeta vm_;
   void* p_;
 
   public:
-  Var() : type_(L"void"), p_(nullptr) {}
-  Var(const stringType& name) : type_(L"void"), p_(nullptr), name_(name) {}
-  Var(const stringType& name, const typeinfo& t) : type_(t), name_(name) {
-    if (t.name() == L"str") {
+  Var(Var const volatile&) = delete;
+  Var(Var const volatile&&) = delete;
+  Var& operator=(Var const volatile&) = delete;
+  Var& operator=(Var const volatile&&) = delete;
+
+  VarMeta& meta() { return vm_; }
+  const VarMeta& meta() const { return vm_; }
+  Var() : vm_(stringType(L""), typeinfo(L"void")), p_(nullptr) {}
+  template <class Str>
+    requires std::same_as<typename std::remove_reference<Str>::type, stringType>
+  Var(const Str&& name) : vm_(stringType(name), typeinfo(L"void")), p_(nullptr) {}
+  template <class Str, class TpInfo>
+    requires std::same_as<typename std::decay<Str>::type, stringType> &&
+             std::same_as<typename std::decay<TpInfo>::type, typeinfo> &&
+             //!< 如果TpInfo为stringType, 转入str类型特化
+             (!std::same_as<typename std::decay<TpInfo>::type, stringType>)
+  Var(Str&& name, TpInfo&& t) : vm_(name, t) {
+    if (typeinfo(t).name() == L"str") {
       p_ = gc.create<stringType>();
-    } else if (t.name() == L"int") {
+    } else if (typeinfo(t).name() == L"int") {
       p_ = gc.create<int>();
-    } else if (t.name() == L"void") {
+    } else if (typeinfo(t).name() == L"void") {
       p_ = nullptr;
-    } else if (t.name() == L"ref") {
+    } else if (typeinfo(t).name() == L"ref") {
       p_ = nullptr;
     }
   }
-  Var(const stringType& name, int p) : name_(name), type_(L"int"), p_(gc.create<int>(p)) {}
-  Var(const stringType& name, Var& p) : name_(name), type_(L"ref"), p_(&p) {}
-  Var(const stringType& name, const stringType& s)
-      : name_(name), type_(L"str"), p_(gc.create<stringType>(s)) {}
-  Var(const Var& v) {
-    name_ = v.name();
-    type_ = v.type();
+  template <class Str>
+    requires std::same_as<typename std::decay<Str>::type, stringType>
+  Var(Str&& name, int p) : vm_(name, typeinfo(L"int")), p_(gc.create<int>(p)) {}
+  template <class Str>
+    requires std::same_as<typename std::decay<Str>::type, stringType>
+  Var(Str&& name, Var& p) : vm_(name, typeinfo(L"ref")), p_(&p) {}
+  template <class Str1, class Str2>
+    requires std::same_as<typename std::decay<Str1>::type, stringType> &&
+                 std::same_as<typename std::decay<Str2>::type, stringType>
+  Var(Str1&& name, Str2&& s)
+      : vm_(stringType(name), typeinfo(L"str")), p_(gc.create<stringType>(s)) {}
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, Var>
+  Var(V&& v) {
     if (v.type().name() == L"int") {
       p_ = gc.create<int>(v.toInt());
     } else if (v.type().name() == L"str") {
@@ -613,9 +690,11 @@ struct Var { /*{{{*/
       p_ = v.pointer();
     }
   }
-  Var(const Var& v, const stringType& name) {
-    name_ = name;
-    type_ = v.type_;
+  template <class V, class Str>
+    requires std::same_as<typename std::decay<V>::type, Var> &&
+             std::same_as<typename std::decay<Str>::type, stringType>
+  Var(Var&& v, Str&& name) {
+    vm_ = v.meta();
     if (v.type().name() == L"int") {
       p_ = gc.create<int>(v.toInt());
     } else if (v.type().name() == L"str") {
@@ -626,34 +705,10 @@ struct Var { /*{{{*/
       p_ = v.pointer();
     }
   }
-  Var(const Var&& v) {
-    name_ = v.name();
-    type_ = v.type_;
-    if (v.type().name() == L"int") {
-      p_ = gc.create<int>(v.toInt());
-    } else if (v.type().name() == L"str") {
-      p_ = gc.create<stringType>(v.toStr());
-    } else if (v.type().name() == L"void") {
-      p_ = nullptr;
-    } else if (v.type().name() == L"ref") {
-      p_ = v.pointer();
-    }
-  }
-  Var(const Var&& v, const stringType& name) {
-    name_ = name;
-    type_ = v.type_;
-    if (v.type().name() == L"int") {
-      p_ = gc.create<int>(v.toInt());
-    } else if (v.type().name() == L"str") {
-      p_ = gc.create<stringType>(v.toStr());
-    } else if (v.type().name() == L"void") {
-      p_ = nullptr;
-    } else if (v.type().name() == L"ref") {
-      p_ = v.pointer();
-    }
-  }
-  Var& operator=(const Var& v) {
-    type_ = v.type_;
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, Var>
+  Var& operator=(V&& v) {
+    vm_ = v.meta();
     if (v.type().name() == L"int") {
       p_ = gc.create<int>(v.toInt());
     } else if (v.type().name() == L"str") {
@@ -665,16 +720,22 @@ struct Var { /*{{{*/
     }
     return *this;
   }
-  typeinfo& type() { return type_; }
-  const typeinfo& type() const { return type_; }
-  stringType& name() { return name_; }
-  const stringType& name() const { return name_; }
+  typeinfo& type() { return vm_.type(); }
+  const typeinfo& type() const { return vm_.type(); }
+  stringType& name() { return vm_.name(); }
+  const stringType& name() const { return vm_.name(); }
   void*& pointer() { return p_; }
   void* pointer() const { return p_; }
   Var& unBox() { return *((Var*)p_); }
   const Var& unBox() const { return *((Var*)p_); }
   int& toInt() { return *(int*)p_; }
   const int& toInt() const { return *(int*)p_; }
+  bool asCondBool() const {
+    if (vm_.name() == L"void" || (vm_.name() == L"int" && *(int*)p_ == 0)) {
+      return false;
+    }
+    return true;
+  }
   stringType& toStr() { return *(stringType*)p_; }
   const stringType& toStr() const { return *(stringType*)p_; }
   template <class _T>
@@ -697,71 +758,163 @@ void isVarPointer(Var* v) {
 #pragma pop
 }
 }  // namespace RuntimeTest
+struct VarMetaManager { /*{{{*/
+  private:
+  std::list<VarMeta> meta_;
+
+  public:
+  VarMetaManager(VarMetaManager const volatile&) = delete;
+  VarMetaManager(VarMetaManager const volatile&&) = delete;
+  VarMetaManager& operator=(VarMetaManager const volatile&) = delete;
+  VarMetaManager& operator=(VarMetaManager const volatile&&) = delete;
+  bool operator==(VarMetaManager const volatile&) const = delete;
+  bool operator==(VarMetaManager const volatile&&) const = delete;
+  bool operator!=(VarMetaManager const volatile&) const = delete;
+  bool operator!=(VarMetaManager const volatile&&) const = delete;
+
+  std::list<VarMeta>& list() { return meta_; }
+  const std::list<VarMeta>& list() const { return meta_; }
+  VarMetaManager() {}
+  template <class V>
+  // 如果为list转入list构造函数
+    requires std::same_as<typename std::decay<V>::type, VarMetaManager>
+  VarMetaManager(V&& v) : meta_(v.list()){};
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, std::list<VarMeta>> ||
+             std::same_as<typename std::decay<V>::type, std::initializer_list<VarMeta>>
+  VarMetaManager(V&& v) : meta_(v){};
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarMetaManager>
+  VarMetaManager& operator=(V&& v) {
+    meta_ = v.list();
+    return *this;
+  }
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarMetaManager>
+  bool operator==(V&& v) const {
+    return meta_ == v.list();
+  }
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarMetaManager>
+  bool operator!=(V&& v) const {
+    return meta_ != v.list();
+  }
+  std::list<VarMeta>::iterator begin() { return meta_.begin(); }
+  std::list<VarMeta>::const_iterator begin() const { return meta_.begin(); }
+  std::list<VarMeta>::iterator end() { return meta_.end(); }
+  std::list<VarMeta>::const_iterator end() const { return meta_.end(); }
+  void regist(const VarMeta& v) { meta_.emplace_back(v); }
+  void regist(const VarMeta&& v) { meta_.emplace_back(v); }
+  ~VarMetaManager() {}
+};                  /*}}}*/
 struct VarManager { /*{{{*/
   private:
   std::list<Var*> vlist;
 
   public:
+  VarManager(VarManager const volatile&) = delete;
+  VarManager(VarManager const volatile&&) = delete;
+  VarManager& operator=(VarManager const volatile&) = delete;
+  VarManager& operator=(VarManager const volatile&&) = delete;
+
   std::list<Var*>& list() { return vlist; }
   const std::list<Var*>& list() const { return vlist; }
   VarManager() {}
-  VarManager(const VarManager& v) : vlist(v.list()) {}
-  VarManager(const VarManager&& v) : vlist(v.list()) {}
-  VarManager& operator=(const VarManager& c) {
-    vlist = c.list();
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarManager>
+  VarManager(V&& v) : vlist(v.list()) {}
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarManager>
+  VarManager& operator=(V&& c) {
+    vlist = VarManager(c).list();
     return *this;
   }
   ~VarManager() {}
   void regist(Var* v) { vlist.emplace_back(v); }
-  Var* find(const stringType& vm) {
+  template <class Str>
+    requires std::convertible_to<typename std::decay<Str>::type, stringType>
+  Var* findByName(Str&& vm) {
     for (auto& i : vlist) {
-      if (i->name() == vm) {
+      if (i->name() == stringType(vm)) {
         return i;
       }
     }
     return nullptr;
   }
-  const Var* find(const stringType& vm) const {
+  template <class Str>
+    requires std::convertible_to<typename std::decay<Str>::type, stringType>
+  const Var* findByName(Str&& vm) const {
     for (auto& i : vlist) {
-      if (i->name() == vm) {
+      if (i->name() == stringType(vm)) {
         return i;
       }
     }
     return nullptr;
   }
-  Var* findRaiseIfNotFound(const stringType& vm) {
+  template <class Str>
+    requires std::convertible_to<typename std::decay<Str>::type, stringType>
+  Var* findByNameRaiseIfNotFound(Str&& vm) {
     for (auto& i : vlist) {
-      if (i->name() == vm) {
+      if (i->name() == stringType(vm)) {
         return i;
       }
     }
-    __RaiseRuntimeError__(L"Var " + vm + L" not found");
+    __RaiseRuntimeError__(L"Var " + stringType(vm) + L" not found");
     return nullptr;
   }
-  const Var* findRaiseIfNotFound(const stringType& vm) const {
+  template <class Str>
+    requires std::convertible_to<typename std::decay<Str>::type, stringType>
+  const Var* findByNameRaiseIfNotFound(Str&& vm) const {
     for (auto& i : vlist) {
-      if (i->name() == vm) {
+      if (i->name() == stringType(vm)) {
         return i;
       }
     }
-    __RaiseRuntimeError__(L"Var " + vm + L" not found");
+    __RaiseRuntimeError__(L"Var " + stringType(vm) + L" not found");
     return nullptr;
   }
-};                /*}}}*/
+}; /*}}}*/
+/*
+ * @brief 储存每个Var的模型(type)
+ * */
 struct VarModel { /*{{{*/
   private:
   typeinfo type_;
 
   public:
+  VarModel(VarModel const volatile&) = delete;
+  VarModel(VarModel const volatile&&) = delete;
+  bool operator==(VarModel const volatile&) const = delete;
+  bool operator==(VarModel const volatile&&) const = delete;
+  bool operator!=(VarModel const volatile&) const = delete;
+  bool operator!=(VarModel const volatile&&) const = delete;
+  VarModel operator=(VarModel const volatile&) = delete;
+  VarModel operator=(VarModel const volatile&&) = delete;
+
   VarModel() {}
-  VarModel(const typeinfo& type) : type_(type) {}
-  VarModel(const VarModel& a) : type_(a.type()) {}
-  VarModel(const VarModel&& a) : type_(a.type()) {}
-  VarModel(const Var& a) : type_(a.type()) {}
-  bool operator==(const VarModel& a) const { return type_ == a.type(); }
-  bool operator!=(const VarModel& a) const { return type_ != a.type(); }
-  VarModel& operator=(const VarModel& a) {
-    type_ = a.type();
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, typeinfo>
+  VarModel(T&& type) : type_(typeinfo(type)) {}
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, VarModel>
+  VarModel(T&& a) : type_(a.type()) {}
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, Var>
+  VarModel(T&& a) : type_(Var(a).type()) {}
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, VarModel>
+  bool operator==(T&& a) const {
+    return type_ == VarModel(a).type();
+  }
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, VarModel>
+  bool operator!=(T&& a) const {
+    return type_ != VarModel(a).type();
+  }
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, VarModel>
+  VarModel& operator=(T&& a) {
+    type_ = VarModel(a).type();
     return *this;
   }
   ~VarModel() {}
@@ -770,34 +923,41 @@ struct VarModel { /*{{{*/
 };                       /*}}}*/
 struct VarModelManager { /*{{{*/
   private:
-  std::list<VarModel*> varmodellist;
+  std::list<VarModel> varmodellist;
 
   public:
+  VarModelManager(VarModelManager const volatile&) = delete;
+  VarModelManager(VarModelManager const volatile&&) = delete;
+  VarModelManager& operator=(VarModelManager const volatile&) = delete;
+  VarModelManager& operator=(VarModelManager const volatile&&) = delete;
+  bool operator==(VarModelManager const volatile&) const = delete;
+  bool operator==(VarModelManager const volatile&&) const = delete;
+
   VarModelManager() {}
-  VarModelManager(const VarModelManager& a) {
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarModelManager>
+  VarModelManager(V&& a) {
     for (auto& i : a) {
-      varmodellist.emplace_back(gc.create<VarModel>(*i));
+      varmodellist.emplace_back(i);
     }
   }
-  VarModelManager(const VarModelManager&& a) {
-    for (auto& i : a) {
-      varmodellist.emplace_back(gc.create<VarModel>(*i));
-    }
-  }
-  VarModelManager(const std::initializer_list<VarModel*>& l) : varmodellist(l) {}
+  VarModelManager(const std::initializer_list<VarModel>& l) : varmodellist(l) {}
   VarModelManager(const std::initializer_list<stringType>& l) {
     for (auto& i : l) {
-      varmodellist.emplace_back(gc.create<VarModel>(typeinfo(i)));
+      varmodellist.emplace_back(typeinfo(i));
     }
   }
   ~VarModelManager() {}
-  bool operator==(const VarModelManager& v) const {
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarModelManager>
+  bool operator==(V&& v) const {
     if (varmodellist.size() != v.size()) {
       return false;
     }
-    auto a = varmodellist.begin(), b = v.begin();
+    auto a = varmodellist.begin();
+    auto b = v.begin();
     while (a != varmodellist.end()) {
-      if (**a != **b) {
+      if (*a != *b) {
         return false;
       }
       ++a;
@@ -805,34 +965,16 @@ struct VarModelManager { /*{{{*/
     }
     return true;
   }
-  bool operator!=(const VarModelManager& v) const {
-    if (varmodellist.size() != v.size()) {
-      return true;
-    }
-    auto a = varmodellist.begin(), b = v.begin();
-    while (a != varmodellist.end()) {
-      if (**a != **b) {
-        return true;
-      }
-      ++a;
-      ++b;
-    }
-    return false;
-  }
-  VarModelManager& operator=(const VarModelManager& v) {
-    for (auto& i : v) {
-      varmodellist.emplace_back(gc.create<VarModel>(*i));
-    }
-    return *this;
-  }
-  bool operator!=(const VarModelManager& v) {
+  template <class V>
+    requires std::same_as<typename std::decay<V>::type, VarModelManager>
+  bool operator!=(V&& v) const {
     if (varmodellist.size() != v.size()) {
       return true;
     }
     auto a = varmodellist.begin();
     auto b = v.begin();
     while (a != varmodellist.end()) {
-      if (**a != **b) {
+      if (*a != *b) {
         return true;
       }
       ++a;
@@ -840,32 +982,47 @@ struct VarModelManager { /*{{{*/
     }
     return false;
   }
-  std::list<VarModel*>& list() { return varmodellist; }
-  const std::list<VarModel*>& list() const { return varmodellist; }
-  std::list<VarModel*>::iterator begin() { return varmodellist.begin(); }
-  const std::list<VarModel*>::const_iterator begin() const { return varmodellist.begin(); }
-  std::list<VarModel*>::iterator end() { return varmodellist.end(); }
-  const std::list<VarModel*>::const_iterator end() const { return varmodellist.end(); }
+  template <class T>
+    requires std::same_as<typename std::decay<T>::type, VarModelManager>
+  VarModelManager& operator=(T&& v) {
+    for (auto& i : v) {
+      varmodellist.emplace_back(i);
+    }
+    return *this;
+  }
+  std::list<VarModel>& list() { return varmodellist; }
+  const std::list<VarModel>& list() const { return varmodellist; }
+  std::list<VarModel>::iterator begin() { return varmodellist.begin(); }
+  const std::list<VarModel>::const_iterator begin() const { return varmodellist.begin(); }
+  std::list<VarModel>::iterator end() { return varmodellist.end(); }
+  const std::list<VarModel>::const_iterator end() const { return varmodellist.end(); }
   size_t size() const { return varmodellist.size(); }
-  void regist(VarModel* v) { varmodellist.emplace_back(v); }
+  void regist(const VarModel& v) { varmodellist.emplace_back(v); }
 };             /*}}}*/
 struct Stack { /*{{{*/
   private:
   std::list<Var*> l;
 
   public:
+  Stack(Stack const volatile&) = delete;
+  Stack(Stack const volatile&&) = delete;
+  Stack& operator=(Stack const volatile&) = delete;
+  Stack& operator=(Stack const volatile&&) = delete;
+  bool operator==(Stack const volatile&) const = delete;
+  bool operator==(Stack const volatile&&) const = delete;
+  bool operator!=(Stack const volatile&) const = delete;
+  bool operator!=(Stack const volatile&&) const = delete;
+
   Stack() {}
-  Stack(const Stack& s) {
-    for (const auto& o : s.l) {
-      l.emplace_back(gc.create<Var>(*o));
-    }
-  }
-  Stack(const Stack&& s) {
+  template <class S>
+    requires std::same_as<typename std::decay<S>::type, Stack>
+  Stack(S&& s) {
     for (const auto& o : s.l) {
       l.emplace_back(gc.create<Var>(*o));
     }
   }
   Stack(const std::initializer_list<Var*>& i) : l(i) {}
+  Stack(const std::list<Var*>& i) : l(i) {}
   std::list<Var*>& list() { return l; }
   const std::list<Var*>& list() const { return l; }
   void push(Var* v) { l.emplace_back(v); }
@@ -879,79 +1036,192 @@ struct Stack { /*{{{*/
   std::list<Var*>::const_iterator begin() const { return l.begin(); }
   std::list<Var*>::iterator end() { return l.end(); }
   std::list<Var*>::const_iterator end() const { return l.end(); }
-  Stack& operator=(const Stack& s) {
+  template <class S>
+    requires std::same_as<typename std::decay<S>::type, Stack>
+  Stack& operator=(S&& s) {
     for (const auto& o : s.l) {
       l.emplace_back(gc.create<Var>(*o));
     }
     return *this;
   }
+  template <class S>
+    requires std::same_as<typename std::decay<S>::type, Stack>
+  bool operator==(S&& s) const {
+    if (l.size() != s.size()) {
+      return false;
+    }
+    auto a = l.begin();
+    auto b = s.begin();
+    while (a != l.end()) {
+      if (**a != **b) {
+        return false;
+      }
+      ++a;
+      ++b;
+    }
+    return true;
+  }
+  template <class S>
+    requires std::same_as<typename std::decay<S>::type, Stack>
+  bool operator!=(S&& s) const {
+    if (l.size() != s.size()) {
+      return true;
+    }
+    auto a = l.begin();
+    auto b = s.begin();
+    while (a != l.end()) {
+      if (**a != **b) {
+        return true;
+      }
+      ++a;
+      ++b;
+    }
+    return false;
+  }
   ~Stack() {}
-};            /*}}}*/
+}; /*}}}*/
 using funcType = std::function<Var*(Stack*)>;
-struct Func { /*{{{*/
+/*
+ * @brief 储存每个Func的元数据(name, params 和 pfunc)
+ */
+// TODO 模板元化
+struct FuncMeta { /*{{{*/
   private:
   stringType name_;
   VarModelManager params_;
-  funcType pfunc;
-  Stack* stack_;
 
   public:
+  FuncMeta(FuncMeta const volatile&) = delete;
+  FuncMeta(FuncMeta const volatile&&) = delete;
+  FuncMeta& operator=(FuncMeta const volatile&) = delete;
+  FuncMeta& operator=(FuncMeta const volatile&&) = delete;
+
   stringType& name() { return name_; }
   const stringType& name() const { return name_; }
   VarModelManager& params() { return params_; }
   const VarModelManager& params() const { return params_; }
-  funcType& function() { return pfunc; }
-  const funcType& function() const { return pfunc; }
+  FuncMeta() {}
+  FuncMeta(const stringType& name, const VarModelManager& vm) : name_(name), params_(vm) {}
+  FuncMeta(const stringType&& name, const VarModelManager& vm) : name_(name), params_(vm) {}
+  FuncMeta(const stringType& name, const VarModelManager&& vm) : name_(name), params_(vm) {}
+  FuncMeta(const stringType&& name, const VarModelManager&& vm) : name_(name), params_(vm) {}
+  FuncMeta(const FuncMeta& fm) : name_(fm.name()), params_(fm.params()) {}
+  FuncMeta(const FuncMeta&& fm) : name_(fm.name()), params_(fm.params()) {}
+  FuncMeta& operator=(const FuncMeta& fm) {
+    name_ = fm.name();
+    params_ = fm.params();
+    return *this;
+  }
+  FuncMeta& operator=(const FuncMeta&& fm) {
+    name_ = fm.name();
+    params_ = fm.params();
+    return *this;
+  }
+  bool operator==(const FuncMeta& fm) const { return name_ == fm.name() && params_ == fm.params(); }
+  bool operator!=(const FuncMeta& fm) const { return name_ != fm.name() || params_ != fm.params(); }
+  bool operator==(const FuncMeta&& fm) const {
+    return name_ == fm.name() && params_ == fm.params();
+  }
+  bool operator!=(const FuncMeta&& fm) const {
+    return name_ != fm.name() || params_ != fm.params();
+  }
+  ~FuncMeta() {}
+};            /*}}}*/
+struct Func { /*{{{*/
+  private:
+  FuncMeta fm_;
+  Stack* stack_;
+  funcType* fn_;
+
+  public:
+  FuncMeta& meta() { return fm_; }
+  const FuncMeta& meta() const { return fm_; }
+  stringType& name() { return fm_.name(); }
+  const stringType& name() const { return fm_.name(); }
+  VarModelManager& params() { return fm_.params(); }
+  const VarModelManager& params() const { return fm_.params(); }
+  funcType& function() { return *fn_; }
+  funcType function() const { return *fn_; }
+  funcType*& pfunction() { return fn_; }
+  funcType* pfunction() const { return fn_; }
   Stack& stack() { return *stack_; }
   const Stack& stack() const { return *stack_; }
   void push(Var* v) { stack_->push(v); }
   Var* pop() { return stack_->pop(); }
   Func() {}
   Func(const stringType& name, const VarModelManager& v, funcType func_)
-      : name_(name), params_(v), pfunc(func_), stack_(gc.create<Stack>()) {}
+      : fm_(name, v), fn_(gc.create<funcType>(func_)), stack_(gc.create<Stack>()) {}
   Func(const Func& f)
-      : name_(f.name()), params_(f.params()), pfunc(f.function()), stack_(gc.create<Stack>()) {}
+      : fm_(f.name(), f.params())
+      , fn_(gc.create<funcType>(f.function()))
+      , stack_(gc.create<Stack>()) {}
   Func(const Func&& f)
-      : name_(f.name()), params_(f.params()), pfunc(f.function()), stack_(gc.create<Stack>()) {}
+      : fm_(f.name(), f.params())
+      , fn_(gc.create<funcType>(f.function()))
+      , stack_(gc.create<Stack>()) {}
   ~Func() {}
   Func& operator=(const Func& f) {
-    name_ = f.name();
-    params_ = f.params();
-    pfunc = f.function();
+    fm_ = f.meta();
     stack_ = gc.create<Stack>();
     return *this;
   }
   Func& operator=(const Func&& f) {
-    name_ = f.name();
-    params_ = f.params();
-    pfunc = f.function();
+    fm_ = f.meta();
     stack_ = gc.create<Stack>();
     return *this;
   }
   Var* call() const {
-    if (stack_->list().size() != params_.size()) {
-      Exception::runtimeError(L"Function `" + name_ + L"` required a stack of size " +
-                              NRT::toWString(params_.size()) + L" which given is " +
+    if (stack_->list().size() != fm_.params().size()) {
+      Exception::runtimeError(L"Function `" + fm_.name() + L"` required a stack of size " +
+                              NRT::toWString(fm_.params().size()) + L" which given is " +
                               NRT::toWString(stack_->size()))
           .raise();
     }
-    auto a1 = params_.begin();
+    auto a1 = fm_.params().begin();
     auto a2 = stack_->begin();
     size_t p = 0;
-    while (a1 != params_.end()) {
-      if ((*a1)->type() != (*a2)->type()) {
-        __RaiseRuntimeError__(L"Function `" + name_ + L"` required a stack of position " +
-                              NRT::toWString(p) + L" is type `" + (*a1)->type().name() +
+    while (a1 != fm_.params().end()) {
+      if ((a1)->type() != (*a2)->type()) {
+        __RaiseRuntimeError__(L"Function `" + fm_.name() + L"` required a stack of position " +
+                              NRT::toWString(p) + L" is type `" + (a1)->type().name() +
                               L"` which given is `" + (*a2)->type().name() + L"`");
       }
       ++a1;
       ++p;
       ++a2;
     }
-    Var* ret = pfunc(stack_);
+    Var* ret = (*fn_)(stack_);
     stack_->list().clear();
     return ret;
   }
+};                       /*}}}*/
+struct FuncMetaManager { /*{{{*/
+  private:
+  std::list<FuncMeta> meta_;
+
+  public:
+  std::list<FuncMeta>& list() { return meta_; }
+  const std::list<FuncMeta>& list() const { return meta_; }
+  FuncMetaManager() {}
+  FuncMetaManager(const FuncMetaManager& f) : meta_(f.list()) {}
+  FuncMetaManager(const FuncMetaManager&& f) : meta_(f.list()) {}
+  FuncMetaManager(const std::initializer_list<FuncMeta>& f) : meta_(f) {}
+  FuncMetaManager(const std::initializer_list<FuncMeta>&& f) : meta_(f) {}
+  FuncMetaManager& operator=(const FuncMetaManager& f) {
+    meta_ = f.list();
+    return *this;
+  }
+  FuncMetaManager& operator=(const FuncMetaManager&& f) {
+    meta_ = f.list();
+    return *this;
+  }
+  bool operator==(const FuncMetaManager& f) const { return meta_ == f.list(); }
+  bool operator!=(const FuncMetaManager& f) const { return meta_ != f.list(); }
+  std::list<FuncMeta>::iterator begin() { return meta_.begin(); }
+  std::list<FuncMeta>::const_iterator begin() const { return meta_.begin(); }
+  std::list<FuncMeta>::iterator end() { return meta_.end(); }
+  std::list<FuncMeta>::const_iterator end() const { return meta_.end(); }
+  ~FuncMetaManager() {}
 };                   /*}}}*/
 struct FuncManager { /*{{{*/
   private:
@@ -1022,7 +1292,7 @@ struct FuncManager { /*{{{*/
     }
     NRT::WString __raise = L"Function " + name + L"(";
     for (auto& i : v.list()) {
-      __raise += i->type().name();
+      __raise += i.type().name();
       __raise += L", ";
     }
     __raise += L") not found";
@@ -1046,14 +1316,17 @@ struct FuncManager { /*{{{*/
     }
     stringType __raise = L"Function " + name + L"(";
     for (auto& i : v.list()) {
-      __raise += i->type().name();
+      __raise += i.type().name();
       __raise += L", ";
     }
     __raise += L") not found";
     __RaiseRuntimeError__(__raise);
     return nullptr;
   }
-};             /*}}}*/
+}; /*}}}*/
+/*
+ * @brief 储存每个Class的元数据(name, [FuncMeta], [Var])
+ * */
 struct Class { /*{{{*/
   private:
   stringType name_;
@@ -1308,16 +1581,37 @@ struct Env { /*{{{*/
   const Class* findClassRaiseIfNotFound(const stringType& s) const {
     return cmanager_.findRaiseIfNotFound(s);
   }
-  Var* findVar(const stringType& s) { return vmanager_.find(s); }
-  Var* findVarRaiseIfNotFound(const stringType& s) { return vmanager_.findRaiseIfNotFound(s); }
-  const Var* findVar(const stringType& s) const { return vmanager_.find(s); }
+  Var* findVar(const stringType& s) { return vmanager_.findByName(s); }
+  Var* findVarRaiseIfNotFound(const stringType& s) {
+    return vmanager_.findByNameRaiseIfNotFound(s);
+  }
+  const Var* findVar(const stringType& s) const { return vmanager_.findByName(s); }
   const Var* findVarRaiseIfNotFound(const stringType& s) const {
-    return vmanager_.findRaiseIfNotFound(s);
+    return vmanager_.findByNameRaiseIfNotFound(s);
   }
   ~Env() {}
 }; /*}}}*/
-Env envLocal;
+Env lenv;
+Env venv;
 
+#define TP_KEYWORD (L"keyword")
+#define TP_IF (L"if")
+#define TP_COND (L"condition")
+#define TP_BLOCK (L"block")
+#define TPDECO_LITERAL(a) (stringType(L"lit-") + a)
+#define TP_INT (L"int")
+#define TP_FLOAT (L"float")
+#define TP_STRING (L"str")
+#define TP_TYPE (L"type")
+#define TP_VAR (L"var")
+#define TP_FUNC (L"func")
+#define TP_NEW (L"new")
+#define TP_MIDOPERATOR (L"mid-operator")
+struct CompilationMeta {
+  private:
+  std::vector<typeinfo> ttable;
+  std::vector<std::pair<stringType, typeinfo>> vtable;
+};
 // Tokenizer Parser and Lexer
 struct Token { /*{{{*/
   private:
@@ -1349,21 +1643,53 @@ struct Token { /*{{{*/
 
 using TokenList = std::vector<Token>;
 class Tokenizer { /*{{{*/
+  private:
+  /*
+   * @brief 帮助分类字符串
+   * */
+  struct Classifier {
+private:
+    const wchar_t* obj;
+
+public:
+    Classifier(const wchar_t* obj) : obj(obj) {}
+    template <ull count>
+    /*
+     * @brief 检测字符串是否包含在数组内(贪婪匹配)
+     * @param [in] arr 传入的检测数组
+     * @return 返回检测到的数组下标
+     * @retval 0 无检测
+     * */
+    long long isOneOf(const std::array<stringType, count>& arr) {
+      struct SingleChecker {
+        bool operator()(const wchar_t* wc, const stringType& c) {
+          ull len = wcslen(wc);
+          if (len < c.length()) {
+            return false;
+          }
+          for (ull i = 0; i != c.length(); ++i) {
+            if (c[i] != wc[i]) {
+              return false;
+            }
+          }
+          return true;
+        }
+      } checkSingle;
+      long long longest = -1;
+      for (ull i = 0; i != count; ++i) {
+        if (checkSingle(obj, arr[i])) {
+          if (longest == -1 || arr[i].length() >= arr[longest].length()) {
+            longest = i;
+          }
+        }
+      }
+      return longest;
+    }
+  };
+
   public:
   static TokenList tokenize(stringType data) {
     struct StrHelper {
-      struct CharHelper {
-        char c_;
-        CharHelper(char c) : c_(c) {}
-        size_t isOneOf(const char* c, size_t l) {
-          for (size_t i = 0; i != l; ++i) {
-            if (c_ == c[i]) {
-              return i;
-            }
-          }
-          return -1;
-        }
-      };
       stringType& p;
       size_t pos;
       StrHelper(stringType& s) : p(s), pos(0) {}
@@ -1373,31 +1699,34 @@ class Tokenizer { /*{{{*/
         // p1: this find
         // p2: last find
         while (p1 < p.length()) {
-          if (CharHelper(p[p1]).isOneOf(__wasted.data(), __wasted.size()) != -1) {
+          // wchars that will be ignored (just treated as seperaters), such as: L' ', L'\t'
+          if (pos = Classifier(p.c_str() + p1).isOneOf(__wasted), pos != -1) {
             if (p2 + 1 != p1) {
               ret.emplace_back(p.substr(p2 + 1, p1 - p2 - 1));
             }
-            p2 = p1;
-            ++p1;
+            p1 += __wasted[pos].length();
+            p2 = p1 - 1;
             continue;
-          } else if (CharHelper(p[p1]).isOneOf(__identifies.data(), __identifies.size()) != -1) {
+          } else if (pos = Classifier(p.c_str() + p1).isOneOf(__identifies), pos != -1) {
             if (p1 != p2 + 1) {
               ret.emplace_back(p.substr(p2 + 1, p1 - p2 - 1));
             }
-            ret.emplace_back(p.substr(p1, 1));
-            p2 = p1;
-            ++p1;
+            ret.emplace_back(p.substr(p1, __identifies[pos].length()));
+            p1 += __identifies[pos].length();
+            p2 = p1 - 1;
             continue;
-          } else if (pos = CharHelper(p[p1]).isOneOf(__string_pair.data(), __string_pair.size()),
-                     pos != -1) {
+          } else if (pos = Classifier(p.c_str() + p1).isOneOf(__string_pair), pos != -1) {
+            if (p1 != p2 + 1) {
+              ret.emplace_back(p.substr(p2 + 1, p1 - p2 - 1));
+            }
             size_t __last = p1, __cur = p1 + 1;
-            while (p[__cur] != __string_pair[pos]) {
+            while (p[__cur] != __string_pair[pos][0]) {
               ++__cur;
             }
-            ret.emplace_back(p.substr(__last, __cur - __last + 1));
+            ret.emplace_back(p.substr(__last, __cur - __last + __string_pair[pos].length()));
             p1 = __cur;
-            p2 = p1;
-            ++p1;
+            p1 += __string_pair[pos].length();
+            p2 = p1 - 1;
             continue;
           } else {
             ++p1;
@@ -1422,13 +1751,13 @@ class Tokenizer { /*{{{*/
 };                 /*}}}*/
 class Syntaxizer { /*{{{*/
   public:
-  Syntaxizer(const Env& e) : lenv(e) {}
-  const Env& lenv;
+  Syntaxizer(Env& e) : lenv(e) {}
+  Env& lenv;
   void syntaxize(TokenList& tl) {
     struct BasicSyntaxizer {
-      const Env& e;
+      Env& e;
       std::list<stringType> vtable, ftable, ctable;
-      BasicSyntaxizer(const Env& e) : e(e) {}
+      BasicSyntaxizer(Env& e) : e(e) {}
       void syntaxize(TokenList& tl) {
         struct IsOneOfKeyword {
           bool operator()(const stringType& s) {
@@ -1443,7 +1772,7 @@ class Syntaxizer { /*{{{*/
         struct IsStrInteger {
           bool operator()(const stringType& s) {
             for (const wchar_t c : s) {
-              if (!isdigit(c)) {
+              if (c > L'9' || c < L'0') {
                 return false;
               }
             }
@@ -1452,19 +1781,17 @@ class Syntaxizer { /*{{{*/
         };
         for (auto i = tl.begin(); i != tl.end(); ++i) {
           if (IsOneOfKeyword()(i->str())) {
-            i->type() = L"keyword";
+            i->type() = TP_KEYWORD;
           } else if (IsStrInteger()(i->str())) {
-            if (!(i + 1 == tl.end())) {
-              if ((i + 1)->str() == L".") {
-                if ((i + 2) == tl.end()) {
-                  __RaiseInvalidSyntax__(L"incompleted float");
-                }
-                stringType in = i->str() + L"." + (i + 2)->str();
-                auto i3 = tl.erase(i, i + 3);
-                i = tl.insert(i3, Token{in, L"float"});
+            if ((i + 1 != tl.end()) && (i + 1)->str() == L".") {
+              if ((i + 2) == tl.end()) {
+                __RaiseInvalidSyntax__(L"incompleted float");
               }
+              stringType in = i->str() + L"." + (i + 2)->str();
+              auto i3 = tl.erase(i, i + 3);
+              i = tl.insert(i3, Token{in, TPDECO_LITERAL(TP_FLOAT)});
             } else {
-              i->type() = L"int";
+              i->type() = TPDECO_LITERAL(TP_INT);
             }
           } else if (i->str()[0] == L'\"') {
             i->str() = i->str().substr(1, i->str().length() - 2);
@@ -1475,18 +1802,17 @@ class Syntaxizer { /*{{{*/
                 pos = i->str().find(pair.first);
               }
             }
-            i->type() = L"str";
-            std::cout << "In line" << __LINE__ << '\n';
-          } else if ((i != tl.begin() && (i - 1)->type() == L"type") ||
+            i->type() = TPDECO_LITERAL(TP_STRING);
+          } else if ((i != tl.begin() && (i - 1)->type() == TP_TYPE) ||
                      std::find(vtable.begin(), vtable.end(), i->str()) != vtable.end()) {
-            i->type() = L"var";
+            i->type() = TP_VAR;
             vtable.emplace_back(i->str());
           } else if (e.findClass(i->str()) != nullptr ||
                      std::find(ctable.begin(), ctable.end(), i->str()) != ctable.end()) {
-            i->type() = L"type";
+            i->type() = TP_TYPE;
           } else if (e.findFunc(i->str()) != nullptr ||
                      std::find(ftable.begin(), ftable.end(), i->str()) != ftable.end()) {
-            i->type() = L"func";
+            i->type() = TP_FUNC;
           }
         }
       }
@@ -1498,8 +1824,13 @@ class Syntaxizer { /*{{{*/
 std::list<TokenList> tokensToSentence(const TokenList& t) { /*{{{*/
   std::list<TokenList> ret;
   auto last = t.begin(), cur = last;
+  long long c = 0;
   for (; cur < t.end(); ++cur) {
-    if (cur->str() == L";") {
+    if (cur->str() == L"{") {
+      ++c;
+    } else if (cur->str() == L"}") {
+      --c;
+    } else if (c == 0 && cur->str() == L";") {
       ret.emplace_back(TokenList(last, cur));
       ++cur;
       last = cur;
@@ -1562,52 +1893,187 @@ void printAstTree(const ASTNode* root) { printAstTree__(root, L"  "); }
 struct ASTBuilder { /*{{{*/
   static Env* vEnv;
   static ASTNode* build(TokenList& tl) {
-    for (auto& i : tl) {
-      i.str().toStdOut();
-      NRT::WString(L"\n").toStdOut();
-    }
-    struct MiddleOperatorRangeChecker {
+    struct MiddleOperatorRangeChecker { /*{{{*/
       static void check(TokenList::iterator cur, const TokenList& l) {
         if (cur == l.end() || cur == l.begin() || cur - 1 != l.begin()) {
           __RaiseInvalidSyntax__(L"MiddleOperatorRangeChecker failed");
         }
       }
+    }; /*}}}*/
+    // if(...)
+    // [Func*](...)
+    // while(...)
+    struct FuncLikeAstBuilder {
+      static std::list<ASTNode*> __build(wchar_t c,
+                                         const stringType& sep,
+                                         TokenList::iterator& __start,
+                                         TokenList::iterator __end) { /*{{{*/
+        if (c != L'(' && c != L'[' && c != L'{') {
+          __RaiseCompilationError__(L"Unknown FuncLikeAstBuilder::__build param `c`");
+        }
+        std::list<ASTNode*> ret;
+        auto __move = __start;
+        long long __count[3]{0, 0, 0};  // ( [ {
+        while (__move != __end) {
+          if (__count[0] == 1 && __count[1] == 0 && __count[2] == 0 && __move->str() == sep) {
+            // 找到一个参数
+            TokenList __param(__start + 1, __move);
+            auto __ast = build(__param);
+            ret.emplace_back(__ast);
+            __start = __move;
+            if (__start == __end) {
+              __RaiseCompilationError__(L"Uncompleted param");
+            }
+          } else if (__move->str() == L"(") {
+            ++__count[0];
+          } else if (__move->str() == L")") {
+            --__count[0];
+          } else if (__move->str() == L"[") {
+            ++__count[1];
+          } else if (__move->str() == L"]") {
+            --__count[1];
+          } else if (__move->str() == L"{") {
+            ++__count[2];
+          } else if (__move->str() == L"}") {
+            --__count[2];
+          }
+          if (__count[0] == 0 && __count[1] == 0 && __count[2] == 0) {
+            break;
+          }
+          ++__move;
+        }
+        // 获取最后一个参数
+        // , ... )
+        // __start, ,__move-1
+        if (__move == __end) {
+          if (__count[0] != 0) {
+            __RaiseCompilationError__(L"Uncompleted `()");
+          }
+          if (__count[1] != 0) {
+            __RaiseCompilationError__(L"Uncompleted `[]`");
+          }
+          if (__count[2] != 0) {
+            __RaiseCompilationError__(L"Uncompleted `{}`");
+          }
+        }
+        if (__start + 1 != __move) {
+          TokenList __param(__start + 1, __move);
+          ASTNode* __ast = build(__param);
+          ret.emplace_back(__ast);
+        }
+        __start = __move;
+        return ret;
+      }
+      /*}}}*/
     };
-    ASTNode* ret = gc.create<ASTNode>();
+    struct BlockAstBuilder {
+      static ASTNode* __build(TokenList::iterator& __start, TokenList::iterator __end) { /*{{{*/
+        ASTNode* root = gc.create<ASTNode>(L"", L"block");
+        auto __move = __start;
+        long long __count[3]{0, 0, 0};  // ( [ {
+        while (__move != __end) {
+          if (__count[0] == 1 && __count[1] == 0 && __count[2] == 0 && __move->str() == L";") {
+            // 找到一个参数
+            TokenList __param(__start + 1, __move);
+            auto __ast = build(__param);
+            root->addChild(__ast);
+            __start = __move;
+            if (__start == __end) {
+              __RaiseCompilationError__(L"Uncompleted param");
+            }
+          } else if (__move->str() == L"{") {
+            ++__count[2];
+          } else if (__move->str() == L"}") {
+            --__count[2];
+          }
+          if (__count[0] == 0 && __count[1] == 0 && __count[2] == 0) {
+            break;
+          }
+          ++__move;
+        }
+        // 获取最后一个参数
+        // , ... )
+        // __start, ,__move-1
+        if (__move == __end) {
+          if (__count[0] != 0) {
+            __RaiseCompilationError__(L"Uncompleted `()");
+          }
+          if (__count[1] != 0) {
+            __RaiseCompilationError__(L"Uncompleted `[]`");
+          }
+          if (__count[2] != 0) {
+            __RaiseCompilationError__(L"Uncompleted `{}`");
+          }
+        }
+        if (__start + 1 != __move) {
+          TokenList __param(__start + 1, __move);
+          auto __p = tokensToSentence(__param);
+          for (auto& i : __p) {
+            ASTNode* __ast = build(i);
+            root->addChild(__ast);
+          }
+        }
+        __start = __move;
+        return root;
+      } /*}}}*/
+    };
     // We should kill all keywords here
     ASTNode* root = gc.create<ASTNode>();
     for (auto i = tl.begin(); i != tl.end(); ++i) {
       if (i->str() == L"=") { /*{{{*/
         MiddleOperatorRangeChecker::check(i, tl);
-        root->attribute() = L"middle-operator";
+        root->attribute() = TP_MIDOPERATOR;
         root->data() = L"=";
         TokenList __r(i + 1, tl.end());
-        root->addChild(gc.create<ASTNode>(tl.begin()->str(), L"var"));
+        root->addChild(gc.create<ASTNode>(tl.begin()->str(), TP_VAR));
         root->addChild(build(__r));
-        break;                                         /*}}}*/
-      } else if (i->type() == L"str") {                /*{{{*/
-        root = (gc.create<ASTNode>(i->str(), L"str")); /*}}}*/
-      } else if (i->type() == L"type") {               /*{{{*/
+        break;                        /*}}}*/
+      } else if (i->str() == L"==") { /*{{{*/
+        MiddleOperatorRangeChecker::check(i, tl);
+        root->attribute() = TP_MIDOPERATOR;
+        root->data() = L"==";
+        TokenList __r(i + 1, tl.end());
+        root->addChild(gc.create<ASTNode>(tl.begin()->str(), TP_VAR));
+        root->addChild(build(__r));
+        break;                                                            /*}}}*/
+      } else if (i->type() == TPDECO_LITERAL(TP_STRING)) {                /*{{{*/
+        root = (gc.create<ASTNode>(i->str(), TPDECO_LITERAL(TP_STRING))); /*}}}*/
+      } else if (i->type() == TPDECO_LITERAL(TP_INT)) {                   /*{{{*/
+        root = (gc.create<ASTNode>(i->str(), TPDECO_LITERAL(TP_INT)));    /*}}}*/
+      } else if (i->type() == TP_TYPE) {                                  /*{{{*/
         if (i + 1 == tl.end()) {
           __RaiseInvalidSyntax__(L"Uncompleted [type] [varName]");
         }
-        if ((i + 1)->type() != L"var") {
+        if ((i + 1)->type() != TP_VAR) {
           __RaiseInvalidSyntax__(L"[type] [varName] required");
         }
-        root = gc.create<ASTNode>(i->str(), L"new-var");
+        root = gc.create<ASTNode>(i->str(), TP_NEW);
         root->addChild(gc.create<ASTNode>((i + 1)->str(), L"var-name"));
         ++i;
         continue;
         /*}}}*/
-      } else if (i->str() == L"import") { /*{{{*/
-        if ((i + 1) == tl.end() || (i + 2) != tl.end()) {
-          __RaiseInvalidSyntax__(L"incompleted `import`");
+      } else if (i->type() == TP_KEYWORD) { /*{{{*/
+        if (i->str() == L"import") {        /*{{{*/
+          if ((i + 1) == tl.end() || (i + 2) != tl.end()) {
+            __RaiseInvalidSyntax__(L"incompleted `import`");
+          }
+          root = (gc.create<ASTNode>((i + 1)->str(), L"import"));
+          if (vEnv->findModule((i + 1)->str()) == nullptr) {
+            __RaiseCompilationError__(L"Module " + (i + 1)->str() + L" not found");
+          }
+          break; /*}}}*/
+        } else if (i->str() == L"if") {
+          root->attribute() = TP_IF;
+          auto k = i + 1;
+          auto __cond = FuncLikeAstBuilder::__build(L'(', L",", k, tl.end());
+          ASTNode* cond = gc.create<ASTNode>(L"", TP_COND);
+          cond->children() = __cond;
+          root->addChild(cond);
+          i = k + 1;
+          auto __block = BlockAstBuilder::__build(i, tl.end());
+          __block->attribute() = TP_BLOCK;
+          root->addChild(__block);
         }
-        root = (gc.create<ASTNode>((i + 1)->str(), L"use-package"));
-        if (vEnv->findModule((i + 1)->str()) == nullptr) {
-          __RaiseCompilationError__(L"Module " + (i + 1)->str() + L" not found");
-        }
-        break;
         /*}}}*/
       } else if (i->str() == L".") { /*{{{*/
         if (i == tl.begin()) {
@@ -1620,60 +2086,15 @@ struct ASTBuilder { /*{{{*/
         i = tl.erase(i - 1, i + 2);
         i = tl.insert(i, Token(s, L"function"));
         /*}}}*/
-      } else if (i->type() == L"func") { /*{{{*/
+      } else if (i->type() == TP_FUNC) { /*{{{*/
         if (i + 1 != tl.end() && (i + 1)->str() == L"(") {
-          auto __start = i + 1;
-          auto __move = __start;
-          long long __count[3]{0, 0, 0};  // ( [ {
-          while (__move != tl.end()) {
-            if (__count[0] == 1 && __count[1] == 0 && __count[2] == 0 && __move->str() == L",") {
-              // 找到一个参数
-              TokenList __param(__start + 1, __move);
-              auto __ast = build(__param);
-              ret->addChild(__ast);
-              __start = __move;
-              if (__start == tl.end()) {
-                __RaiseCompilationError__(L"Uncompleted param");
-              }
-            } else if (__move->str() == L"(") {
-              ++__count[0];
-            } else if (__move->str() == L")") {
-              --__count[0];
-            } else if (__move->str() == L"[") {
-              ++__count[1];
-            } else if (__move->str() == L"]") {
-              --__count[1];
-            } else if (__move->str() == L"{") {
-              ++__count[2];
-            } else if (__move->str() == L"}") {
-              --__count[2];
-            }
-            if (__count[0] == 0 && __count[1] == 0 && __count[2] == 0) {
-              break;
-            }
-            ++__move;
+          auto k = i + 1;
+          auto __r = FuncLikeAstBuilder::__build(L'(', L",", k, tl.end());
+          root = gc.create<ASTNode>(i->str(), TP_FUNC);
+          for (auto& i : __r) {
+            root->addChild(i);
           }
-          // 获取最后一个参数
-          // , ... )
-          // __start, ,__move-1
-          if (__move == tl.end()) {
-            if (__count[0] != 0) {
-              __RaiseCompilationError__(L"Uncompleted `()");
-            }
-            if (__count[1] != 0) {
-              __RaiseCompilationError__(L"Uncompleted `[]`");
-            }
-            if (__count[2] != 0) {
-              __RaiseCompilationError__(L"Uncompleted `{}`");
-            }
-          }
-          root = gc.create<ASTNode>(i->str(), L"func");
-          if (__start + 1 != __move) {
-            TokenList __param(__start + 1, __move);
-            ASTNode* __ast = build(__param);
-            root->addChild(__ast);
-          }
-          i = __move;
+          i = k;
         }
 
         /*}}}*/
@@ -1683,8 +2104,7 @@ struct ASTBuilder { /*{{{*/
         root = gc.create<ASTNode>(i->str(), i->type());
       }                                                   /*}}}*/
     }
-    ret = root;
-    return ret;
+    return root;
   }
 }; /*}}}*/
 // CMLReg only store pointer to object
@@ -1747,26 +2167,23 @@ struct CMLEnv { /*{{{*/
   }
 };             /*}}}*/
 enum CMLTYPE { /*{{{*/
-               // func[Func*], retreg[ull ]
-               CML_CALL_FUNC = 1,
-               // reg[ull], func[Func*]
-               CML_PUSH_REG_TO_FUNC = 3,
-               // mem[Var*], func[Func*]
-               CML_PUSH_ADDR_TO_FUNC = 4,
-               // func[Func*], retreg[ull]
-               CML_POP_FUNC_TO_REG = 5,
-               // mem[Var*], reg[ull]
-               CML_MOVE_ADDR_TO_REG = 6,
-               // reg[ull], mem[Var*]
-               CML_MOVE_REG_TO_ADDR = 7,
-               // reg[ull], reg[ull]
-               CML_MOVE_REG_TO_REG = 8,
-               // mem[Var*], mem[Var*]
-               CML_MOVE_ADDR_TO_ADDR = 9,
-               // var(Var*), NONE
-               CML_STORE = 10,
+               // f1[Func*], r1[ull]: reg[r1] = f1->call()
+               CML_CALL_FUNC_RET_REG = 1,
+               // r1[ull], f1[Func*]: f1->push((Var*)reg[r1])
+               CML_PUSH_REG_TO_FUNC = 2,
+               // m1[Var*], f1[Func*]: f1->push(m1)
+               CML_PUSH_ADDR_TO_FUNC = 3,
+               // m1[Var*], r1[ull]: *(Var*)reg[r1] = *m1
+               CML_MOVE_ADDR_TO_REG = 4,
+               // r1[ull], m1[Var*]: *m1 = *(Var*)reg[r1]
+               CML_MOVE_REG_TO_ADDR = 5,
+               // r1[ull], r2[ull]: reg[r2] = reg[r1]
+               CML_MOVE_REG_TO_REG = 6,
+               // m1[Var*], m2[Var*]: *m2=*m1
+               CML_MOVE_ADDR_TO_ADDR = 7,
+               // m1[CML*], r1[ull]: if(reg[r1] != 0){jump-to(target)}
+               CML_JMP_IF_REG = 9,
                // v1[ ull ], v2[ ull ]
-               CML_ASSIGN_VAR_REG_TO_VAR_REG = 11,
                CML_PLACEHOLDER = (ull)-1
 };           /*}}}*/
 struct CML { /*{{{*/
@@ -1825,17 +2242,20 @@ struct CMLPackage { /*{{{*/
 void printCMLPackage(CMLPackage* c) {
 #define TEST_CML(attr) ((i->id()) == (attr) ? std::string(#attr) : std::string(""))
   for (auto& i : c->code()) {
-    std::cout << TEST_CML(CML_CALL_FUNC) + TEST_CML(CML_PUSH_REG_TO_FUNC) +
-                     TEST_CML(CML_PUSH_ADDR_TO_FUNC) + TEST_CML(CML_POP_FUNC_TO_REG) +
-                     TEST_CML(CML_PLACEHOLDER) + TEST_CML(CML_MOVE_REG_TO_REG) +
-                     TEST_CML(CML_MOVE_ADDR_TO_REG) + TEST_CML(CML_MOVE_REG_TO_ADDR) +
-                     TEST_CML(CML_MOVE_ADDR_TO_ADDR) + TEST_CML(CML_STORE) +
-                     TEST_CML(CML_ASSIGN_VAR_REG_TO_VAR_REG);
+    std::cout << TEST_CML(CML_CALL_FUNC_RET_REG) + TEST_CML(CML_PUSH_REG_TO_FUNC) +
+                     TEST_CML(CML_PUSH_ADDR_TO_FUNC) + TEST_CML(CML_PLACEHOLDER) +
+                     TEST_CML(CML_MOVE_REG_TO_REG) + TEST_CML(CML_MOVE_ADDR_TO_REG) +
+                     TEST_CML(CML_MOVE_REG_TO_ADDR) + TEST_CML(CML_MOVE_ADDR_TO_ADDR) +
+                     TEST_CML(CML_JMP_IF_REG);
     std::cout << " " << std::hex << i->param1() << ", " << i->param2() << std::dec << '\n';
+    if (i->id() == CML_JMP_IF_REG) {
+      CMLPackage* p = (CMLPackage*)i->param1AsPointer();
+      printCMLPackage(p);
+    }
   }
 }
 
-Env* ASTBuilder::vEnv = &envLocal;
+Env* ASTBuilder::vEnv = &lenv;
 struct LambdaVarNameGenerator { /*{{{*/
   private:
   ull cur = 0;
@@ -1868,53 +2288,109 @@ struct LambdaClassNameGenerator { /*{{{*/
     ++cur;
     return L"?C?" + NRT::toWString(cur);
   }
-} lcnGenerator;   /*}}}*/
+} lcnGenerator; /*}}}*/
+bool hasLitDeco(const stringType& s) {
+  if (s.substr(0, 4) == L"lit-") {
+    return true;
+  }
+  return false;
+}
+stringType removeLitDeco(stringType s) {
+  if (s.substr(0, 4) == L"lit-") {
+    return s.substr(4, s.length() - 4);
+  }
+  return s;
+}
+bool checkTypeEquality(const stringType& ltype, const stringType& rtype) {
+  return removeLitDeco(ltype) == removeLitDeco(rtype);
+}
 struct Compiler { /*{{{*/
+  /* @brief Runtime的builtin Func&Var&Class&Module*/
   Env* vEnv;
+  std::list<VarMeta> vmeta_;
+  std::list<FuncMeta> fmeta_;
+  std::list<Class> cmeta_;
   Compiler(Env* e) : vEnv(e) {}
   CMLPackage* codeToCML(ASTNode* root) {
     CMLPackage* ret = gc.create<CMLPackage>();
-    if (root->attribute() == L"func") {
+    if (root->attribute() == TP_BLOCK) {
+      for (auto& i : root->children()) {
+        CMLPackage* cml = codeToCML(i);
+        ret->add(cml);
+      }
+    } else if (root->attribute() == TP_COND) {
+      for (auto& i : root->children()) {
+        CMLPackage* cml = codeToCML(i);
+        ret->add(cml);
+      }
+    } else if (root->attribute() == TPDECO_LITERAL(TP_STRING)) {
+      Var* v = gc.create<Var>(stringType(L""), root->data());
+      ret->add(gc.create<CML>(CML_MOVE_ADDR_TO_REG, (ull)v, CML_REG_RETURN));
+    } else if (root->attribute() == TPDECO_LITERAL(TP_INT)) {
+      Var* v = gc.create<Var>(stringType(L""), NRT::WStringTo<int>(root->data()));
+      ret->add(gc.create<CML>(CML_MOVE_ADDR_TO_REG, (ull)v, CML_REG_RETURN));
+    } else if (root->attribute() == TP_FUNC) {
       Func* f = vEnv->findFuncRaiseIfNotFound(root->data());
       for (auto& j : root->children()) {
         CMLPackage* b = codeToCML(j);
         ret->add(b);
         ret->add(gc.create<CML>(CML_PUSH_REG_TO_FUNC, CML_REG_RETURN, (ull)f));
       }
-      ret->add(gc.create<CML>(CML_CALL_FUNC, (ull)f, CML_REG_RETURN));
-    } else if (root->attribute() == L"str") {
-      Var* v = gc.create<Var>(L"", root->data());
-      ret->add(gc.create<CML>(CML_MOVE_ADDR_TO_REG, (ull)v, CML_REG_RETURN));
-    } else if (root->attribute() == L"var")
+      ret->add(gc.create<CML>(CML_CALL_FUNC_RET_REG, (ull)f, CML_REG_RETURN));
+    } else if (root->attribute() == TP_VAR)
     // 根据名字获取地址, 返回在reg[0]
     {
       Func* f1 = vEnv->findFuncRaiseIfNotFound(L"$get-var-pointer-by-name-raise-if-not-found");
-      ret->add(
-          gc.create<CML>(CML_PUSH_ADDR_TO_FUNC, (ull)gc.create<Var>(L"", root->data()), (ull)f1));
-      ret->add(gc.create<CML>(CML_CALL_FUNC, (ull)f1, CML_REG_RETURN));
-    } else if (root->attribute() == L"middle-operator") {
+      ret->add(gc.create<CML>(CML_PUSH_ADDR_TO_FUNC,
+                              (ull)gc.create<Var>(stringType(L""), root->data()), (ull)f1));
+      ret->add(gc.create<CML>(CML_CALL_FUNC_RET_REG, (ull)f1, CML_REG_RETURN));
+    } else if (root->attribute() == TP_MIDOPERATOR) {
       // 对于每个操作符, 将其转为对应的 =(&Var, &Var)
       if (root->data() == L"=") {
         Func* f1 = vEnv->findFuncRaiseIfNotFound(L"$get-var-pointer-by-name-raise-if-not-found",
                                                  VarModelManager{L"str"});
-        Func* f2 = vEnv->findFuncRaiseIfNotFound(L"$new-var", VarModelManager{L"str", L"str"});
+        // 获取左操作符类型
+        Func* f2 = vEnv->findFuncRaiseIfNotFound(L"=", VarModelManager{L"str", L"str"});
         // let left operand to ref
-        ret->add(gc.create<CML>(CML_PUSH_ADDR_TO_FUNC,
-                                (ull)gc.create<Var>(L"", root->children().front()->data()),
-                                (ull)f1));
-        ret->add(gc.create<CML>(CML_CALL_FUNC, (ull)f1, 1));
+        ret->add(gc.create<CML>(
+            CML_PUSH_ADDR_TO_FUNC,
+            (ull)gc.create<Var>(stringType(L""), root->children().front()->data()), (ull)f1));
+        ret->add(gc.create<CML>(CML_CALL_FUNC_RET_REG, (ull)f1, 1));
+        ret->add(gc.create<CML>(CML_PUSH_REG_TO_FUNC, (ull)1, (ull)f2));
         CMLPackage* __cr_operand = codeToCML(root->children().back());
         ret->add(__cr_operand);
-        ret->add(gc.create<CML>(CML_ASSIGN_VAR_REG_TO_VAR_REG, CML_REG_RETURN, 1));
+        ret->add(gc.create<CML>(CML_PUSH_REG_TO_FUNC, (ull)CML_REG_RETURN, (ull)f2));
+        ret->add(gc.create<CML>(CML_CALL_FUNC_RET_REG, (ull)f2, CML_REG_RETURN));
+      } else if (root->data() == L"==") {
+        Func* f1 = vEnv->findFuncRaiseIfNotFound(L"$get-var-pointer-by-name-raise-if-not-found",
+                                                 VarModelManager{L"str"});
+        Func* f2 = vEnv->findFuncRaiseIfNotFound(L"=", VarModelManager{L"str", L"str"});
+        // let left operand to ref
+        ret->add(gc.create<CML>(
+            CML_PUSH_ADDR_TO_FUNC,
+            (ull)gc.create<Var>(stringType(L""), root->children().front()->data()), (ull)f1));
+        ret->add(gc.create<CML>(CML_CALL_FUNC_RET_REG, (ull)f1, 1));
+        ret->add(gc.create<CML>(CML_PUSH_REG_TO_FUNC, (ull)1, (ull)f2));
+        CMLPackage* __cr_operand = codeToCML(root->children().back());
+        ret->add(__cr_operand);
+        ret->add(gc.create<CML>(CML_PUSH_REG_TO_FUNC, (ull)CML_REG_RETURN, (ull)f2));
+        ret->add(gc.create<CML>(CML_CALL_FUNC_RET_REG, (ull)f2, CML_REG_RETURN));
       }
-    } else if (root->attribute() == L"new-var") {
-      ret->add(gc.create<CML>(CML_PUSH_ADDR_TO_FUNC, (ull)gc.create<Var>(L"", root->data()),
-                              (ull)vEnv->findFuncRaiseIfNotFound(L"$new-var")));
+    } else if (root->attribute() == TP_NEW) {
       ret->add(gc.create<CML>(CML_PUSH_ADDR_TO_FUNC,
-                              (ull)gc.create<Var>(L"", root->children().front()->data()),
+                              (ull)gc.create<Var>(stringType(L""), root->data()),
                               (ull)vEnv->findFuncRaiseIfNotFound(L"$new-var")));
-      ret->add(gc.create<CML>(CML_CALL_FUNC, (ull)vEnv->findFuncRaiseIfNotFound(L"$new-var"),
-                              CML_REG_RETURN));
+      ret->add(
+          gc.create<CML>(CML_PUSH_ADDR_TO_FUNC,
+                         (ull)gc.create<Var>(stringType(L""), root->children().front()->data()),
+                         (ull)vEnv->findFuncRaiseIfNotFound(L"$new-var")));
+      ret->add(gc.create<CML>(CML_CALL_FUNC_RET_REG,
+                              (ull)vEnv->findFuncRaiseIfNotFound(L"$new-var"), CML_REG_RETURN));
+    } else if (root->attribute() == TP_IF) {
+      CMLPackage* __cond = codeToCML(root->children().front());
+      CMLPackage* __block = codeToCML(root->children().back());
+      ret->add(__cond);
+      ret->add(gc.create<CML>(CML_JMP_IF_REG, (ull)__block, CML_REG_RETURN));
     }
     return ret;
   }
@@ -1941,7 +2417,7 @@ struct Initializer { /*{{{*/
   static void init(Env& envLocal) {
     // Module
     VarModelManager vm1;
-    vm1.regist(gc.create<VarModel>(typeinfo(L"str")));
+    vm1.regist(typeinfo(L"str"));
     envLocal.registFunc(gc.create<Func>(L"print", vm1, [](const Stack* s) -> Var* {
       for (auto& i : s->list()) {
         i->toStr().toStdOut();
@@ -1950,25 +2426,25 @@ struct Initializer { /*{{{*/
     }));
     VarModelManager vm2;
     envLocal.registFunc(gc.create<Func>(L"input", vm2, [](const Stack* s) -> Var* {
-      return gc.create<Var>(L"", stringType::fromStdInReadLine());
+      return gc.create<Var>(stringType(L""), stringType::fromStdInReadLine());
     }));
     VarModelManager vm3;
-    vm3.regist(gc.create<VarModel>(typeinfo(L"str")));
-    vm3.regist(gc.create<VarModel>(typeinfo(L"str")));
+    vm3.regist(typeinfo(L"str"));
+    vm3.regist(typeinfo(L"str"));
     envLocal.registFunc(gc.create<Func>(L"$new-var", vm3, [&envLocal](const Stack* s) -> Var* {
       Var* ret = gc.create<Var>(s->list().back()->toStr(), typeinfo(s->list().front()->toStr()));
       envLocal.registVar(ret);
       return ret;
     }));
     VarModelManager vm4;
-    vm4.regist(gc.create<VarModel>(typeinfo(L"str")));
+    vm4.regist(typeinfo(L"str"));
     envLocal.registFunc(gc.create<Func>(
         L"$get-var-pointer-by-name-raise-if-not-found", vm4, [&envLocal](const Stack* s) -> Var* {
           return envLocal.findVarRaiseIfNotFound((*s->begin())->toStr());
         }));
     VarModelManager vm5;
-    vm5.regist(gc.create<VarModel>(typeinfo(L"ref")));
-    vm5.regist(gc.create<VarModel>(typeinfo(L"ref")));
+    vm5.regist(typeinfo(L"ref"));
+    vm5.regist(typeinfo(L"ref"));
     envLocal.registFunc(
         gc.create<Func>(L"$let-var-to-var", vm5, [&envLocal](const Stack* s) -> Var* {
           *s->list().front() = *s->list().back();
@@ -1976,11 +2452,20 @@ struct Initializer { /*{{{*/
         }));
 
     VarModelManager vm6;
-    vm6.regist(gc.create<VarModel>(typeinfo(L"ref")));
-    vm6.regist(gc.create<VarModel>(typeinfo(L"ref")));
-    envLocal.registFunc(gc.create<Func>(L"$=", vm6, [&envLocal](const Stack* s) -> Var* {
+    vm6.regist(typeinfo(L"str"));
+    vm6.regist(typeinfo(L"str"));
+    envLocal.registFunc(gc.create<Func>(L"=", vm6, [&envLocal](const Stack* s) -> Var* {
       *s->list().front() = *s->list().back();
       return gc.create<Var>();
+    }));
+    VarModelManager vm7;
+    vm7.regist(typeinfo(L"str"));
+    vm7.regist(typeinfo(L"str"));
+    envLocal.registFunc(gc.create<Func>(L"==", vm7, [&envLocal](const Stack* s) -> Var* {
+      if (s->list().front()->toStr() == s->list().back()->toStr()) {
+        return gc.create<Var>(stringType(L""), true);
+      }
+      return gc.create<Var>(stringType(L""), false);
     }));
     // Class
     envLocal.registClass(gc.create<Class>(L"str"));
@@ -1993,7 +2478,7 @@ struct Interpreter { /*{{{*/
   void execCML(CMLPackage* c) {
     for (auto& code : c->code()) {
       switch (code->id()) {
-        case CML_CALL_FUNC: {
+        case CML_CALL_FUNC_RET_REG: {
           cenv->reg(code->param2()) = ((Func*)code->param1AsPointer())->call();
           break;
         }
@@ -2003,11 +2488,6 @@ struct Interpreter { /*{{{*/
         }
         case CML_PUSH_ADDR_TO_FUNC: {
           ((Func*)code->param2AsPointer())->push((Var*)code->param1AsPointer());
-          break;
-        }
-        case CML_POP_FUNC_TO_REG: {
-          Func* f = env->findFuncRaiseIfNotFound(((Var*)code->param1AsPointer())->toStr());
-          cenv->reg(code->param2()) = (ull)f->pop();
           break;
         }
         case CML_MOVE_REG_TO_REG: {
@@ -2025,10 +2505,10 @@ struct Interpreter { /*{{{*/
         case CML_MOVE_ADDR_TO_ADDR: {
           *(ull*)code->param2AsPointer() = *(ull*)code->param1AsPointer();
         }
-        case CML_ASSIGN_VAR_REG_TO_VAR_REG: {
-          *(Var*)cenv->reg(code->param2()).dataAsPointer() =
-              *(Var*)cenv->reg(code->param1()).dataAsPointer();
-          break;
+        case CML_JMP_IF_REG: {
+          if (((Var*)cenv->reg(code->param2()).dataAsPointer())->asCondBool()) {
+            execCML((CMLPackage*)code->param1AsPointer());
+          }
         }
       }
     }
@@ -2036,10 +2516,15 @@ struct Interpreter { /*{{{*/
 }; /*}}}*/
 
 int main() {
-  Initializer::init(envLocal);
-  stringType s1(L"str a;a=input();print(a);");
+  Initializer::init(lenv);
+  Initializer::init(venv);
+  stringType s1(L"if(1==1){print(\"Hello, world\");}");
   auto l1 = Tokenizer::tokenize(s1);
-  Syntaxizer(envLocal).syntaxize(l1);
+  for (auto& i : l1) {
+    std::cout << i.type() << ":" << i.str() << '\n';
+  }
+  Syntaxizer(venv).syntaxize(l1);
+
   auto l2 = tokensToSentence(l1);
   CMLEnv cenv;
   for (auto& ps : l2) {
@@ -2047,12 +2532,12 @@ int main() {
 #ifdef __NIRVANA_DEBUG__
     printAstTree(p1);
 #endif
-    auto p2 = Compiler(&envLocal).codeToCML(p1);
+    auto p2 = Compiler(&lenv).codeToCML(p1);
     Optimizer::optimizeCML(p2);
 #ifdef __NIRVANA_DEBUG__
     printCMLPackage(p2);
 #endif
-    Interpreter(&envLocal, &cenv).execCML(p2);
+    Interpreter(&lenv, &cenv).execCML(p2);
   }
   return 0;
 }
